@@ -1,0 +1,34 @@
+def bfs_shortest_path(start, goal):
+    graph = build_graph()
+
+    queue = deque([[start]])
+    visited = set()
+
+    while queue:
+        path = queue.popleft()
+        node = path[-1]
+
+        if node == goal:
+            # Station code → name mapping
+            stations = Station.objects.filter(code__in=path)
+            name_map = {s.code: s.name for s in stations}
+
+            total_distance = calculate_total_distance(path)
+            fare = calculate_fare(total_distance)
+
+            return {
+                "stations": [name_map[code] for code in path],
+                "distance": total_distance,
+                "fare": fare,
+                
+            }
+
+        if node not in visited:
+            visited.add(node)
+
+            for neighbor in graph.get(node, []):
+                new_path = list(path)
+                new_path.append(neighbor)
+                queue.append(new_path)
+
+    return None

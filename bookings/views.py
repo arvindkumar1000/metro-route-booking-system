@@ -8,7 +8,7 @@ from datetime import timedelta
 from .models import Ticket
 from metro.models import Station
 from rest_framework.views import APIView
-from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 
 
 # IMPORT SERVICES, NOT VIEWS ✅
@@ -73,7 +73,7 @@ def book_ticket(request):
     })
 
 
-
+# Book Ticket API....
 class BookTicketView(APIView):
 
     def post(self, request):
@@ -121,32 +121,81 @@ class BookTicketView(APIView):
         })
         
 
+# Check the detail of ticket...
+class TicketDetailView(APIView):
+    def get(self, request, ticket_id):
+        ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+
+        data = {
+            "success": True,
+            "ticket": {
+                "ticket_id": ticket.ticket_id,
+                "source": ticket.source,
+                "destination": ticket.destination,
+                "passengers": ticket.passengers,
+                "total_fare": ticket.total_fare,
+                "stations": ticket.stations,
+                "distance": ticket.distance,
+                "travel_time": ticket.travel_time,
+                "interchanges": ticket.interchanges,
+                "booking_time": ticket.booking_time,
+                "status": ticket.status,
+                "is_used": ticket.is_used,
+                "valid_until": ticket.valid_until
+            }
+        }
+
+        return Response(data)
 
 
 
+# Cancel Ticket API here....
+class CancelTicketView(APIView):
+    def post(self, request):
+        ticket_id = request.data.get("ticket_id")
 
+        if not ticket_id:
+            return Response(
+                {"success": False, "error": "ticket_id required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+
+        if ticket.status == "CANCELLED":
+            return Response({"success": False, "error": "Ticket already cancelled"})
+
+        ticket.status = "CANCELLED"
+        ticket.save()
+
+        return Response({"success": True, "message": "Ticket cancelled"})
+
+
+# Ticket Validation API (Exist,Expired,Allready Used, Not Canceled)
 class ValidateTicketView(APIView):
-    
-    def get(self, request):
-        ticket_id = request.GET.get("ticket_id")
+    def post(self, request):
+        ticket_id = request.data.get("ticket_id")
 
-        try:
-            ticket = Ticket.objects.get(ticket_id=ticket_id)
-        except Ticket.DoesNotExist:
-            return Response({"valid": False, "reason": "INVALID_TICKET"})
+        if not ticket_id:
+            return Response(
+                {"success": False, "error": "ticket_id required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if ticket.status != "CONFIRMED":
-            return Response({"valid": False, "reason": "CANCELLED"})
+        ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+
+        if ticket.status == "CANCELLED":
+            return Response({"success": False, "error": "Ticket cancelled"})
 
         if ticket.is_used:
-            return Response({"valid": False, "reason": "ALREADY_USED"})
+            return Response({"success": False, "error": "Ticket already used"})
 
-        if timezone.now() > ticket.valid_until:
-            return Response({"valid": False, "reason": "EXPIRED"})
+        if ticket.valid_until < timezone.now():
+            return Response({"success": False, "error": "Ticket expired"})
 
         ticket.is_used = True
         ticket.save()
 
-        return Response({"valid": True})
+        return Response({"success": True, "message": "Entry allowed"})
 
 

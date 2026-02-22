@@ -21,6 +21,8 @@ from .views import home
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/accounts/', include('accounts.urls')),
-    path('api/',include("metro.urls")),
+    path('api/metro/',include("metro.urls")),
+    path("api/bookings/", include("bookings.urls")),
+
     path('',home) #root path
 ]

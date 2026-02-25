@@ -199,12 +199,6 @@ class ValidateTicketView(APIView):
 
 
 #  Payment API....
-import random
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from .models import Ticket, PaymentHistory
-
-
 class PaymentView(APIView):
 
     def post(self, request):

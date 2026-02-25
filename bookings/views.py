@@ -1,14 +1,13 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-
-from .models import Ticket
 from django.utils import timezone
 from datetime import timedelta
-from .models import Ticket
+from .models import Ticket, PaymentHistory
 from metro.models import Station
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
+import random
 
 
 # IMPORT SERVICES, NOT VIEWS ✅
@@ -199,3 +198,84 @@ class ValidateTicketView(APIView):
         return Response({"success": True, "message": "Entry allowed"})
 
 
+#  Payment API....
+import random
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from .models import Ticket, PaymentHistory
+
+
+class PaymentView(APIView):
+
+    def post(self, request):
+        ticket_id = request.data.get("ticket_id")
+
+        if not ticket_id:
+            return Response({"success": False, "error": "ticket_id required"})
+
+        try:
+            ticket = Ticket.objects.get(ticket_id=ticket_id)
+        except Ticket.DoesNotExist:
+            return Response({"success": False, "error": "Invalid ticket_id"})
+
+        #  Rule 1 – Only PENDING allowed
+        if ticket.status != "PENDING":
+            return Response({
+                "success": False,
+                "error": f"Payment not allowed for status {ticket.status}"
+            })
+
+        # Rule 2 – Prevent double success
+        already_paid = PaymentHistory.objects.filter(
+            ticket=ticket,
+            status="SUCCESS"
+        ).exists()
+
+        if already_paid:
+            return Response({
+                "success": False,
+                "error": "Payment already completed"
+            })
+
+        # Rule 3 – Retry logic
+        last_payment = PaymentHistory.objects.filter(ticket=ticket).last()
+
+        if last_payment and last_payment.status == "SUCCESS":
+            return Response({
+                "success": False,
+                "error": "Ticket already paid"
+            })
+
+        # Simulated gateway result
+        payment_status = random.choice(["SUCCESS", "FAILED"])
+
+        PaymentHistory.objects.create(
+            ticket=ticket,
+            status=payment_status,
+            amount=ticket.total_fare
+        )
+
+        # Update ticket
+        if payment_status == "SUCCESS":
+            ticket.status = "CONFIRMED"
+        else:
+            ticket.status = "FAILED"
+
+        ticket.save()
+
+        return Response({
+            "success": True,
+            "payment_status": payment_status,
+            "ticket_status": ticket.status
+        })
+
+# Add Payment History API...........
+class PaymentHistoryView(APIView):
+    
+    def get(self, request, ticket_id):
+        payments = PaymentHistory.objects.filter(ticket__ticket_id=ticket_id).values()
+
+        return Response({
+            "success": True,
+            "payments": list(payments)
+        })

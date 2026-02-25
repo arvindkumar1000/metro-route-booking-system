@@ -30,11 +30,59 @@ class Ticket(models.Model):
     status = models.CharField(
         max_length=20,
         choices=[
+            ("PENDING", "PENDING"),
             ("CONFIRMED", "CONFIRMED"),
-            ("CANCELLED", "CANCELLED")
+            ("CANCELLED", "CANCELLED"),
+            ("FAILED", "FAILED"),
         ],
-        default="CONFIRMED"
+        default="PENDING"
     )
 
     def __str__(self):
         return f"{self.ticket_id} | {self.source} → {self.destination}"
+
+
+
+class Payment(models.Model):
+    payment_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+
+    ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE)
+
+    amount = models.PositiveIntegerField()
+
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("INITIATED", "INITIATED"),
+            ("SUCCESS", "SUCCESS"),
+            ("FAILED", "FAILED"),
+        ],
+        default="INITIATED"
+    )
+
+    transaction_id = models.CharField(max_length=200, null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    
+    
+# payment History model...
+class PaymentHistory(models.Model):
+    payment_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    ticket = models.ForeignKey("Ticket", on_delete=models.CASCADE, related_name="payments")
+
+    amount = models.IntegerField()
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("SUCCESS", "SUCCESS"),
+            ("FAILED", "FAILED"),
+        ]
+    )
+
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.payment_id} | {self.status}"
+    
+    

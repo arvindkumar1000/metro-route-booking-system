@@ -8,9 +8,6 @@ from unittest.mock import patch
 
 # Create your tests here.
 
-
-
-
 class BookingTests(TestCase):
 
     def setUp(self):

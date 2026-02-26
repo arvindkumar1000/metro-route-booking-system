@@ -44,7 +44,7 @@ def calculate_distance(path):
 
 
 # -----------------------------
-# Fare Calculation (₹ Logic)
+# Fare Calculation (Rs. Logic)
 # -----------------------------
 def calculate_fare(distance):
     if distance <= 2:

@@ -8,9 +8,10 @@ from metro.models import Station
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 import random
+from django.db.models import Sum
 
 
-# IMPORT SERVICES, NOT VIEWS ✅
+# IMPORT SERVICES, NOT VIEWS 
 from metro.services import (
     bfs_shortest_path,
     calculate_interchanges,
@@ -70,6 +71,30 @@ def book_ticket(request):
         "stations": station_names,
         "total_fare": total_fare
     })
+
+
+
+# AdminStatsView -(ADMIN ANALYTICS APIs)
+class AdminStatsView(APIView):
+    
+    def get(self, request):
+
+        total_tickets = Ticket.objects.count()
+        confirmed = Ticket.objects.filter(status="CONFIRMED").count()
+        failed = PaymentHistory.objects.filter(status="FAILED").count()
+        refunded = PaymentHistory.objects.filter(status="REFUNDED").count()
+
+        revenue = PaymentHistory.objects.filter(
+            status="SUCCESS"
+        ).aggregate(total=Sum("amount"))["total"] or 0
+
+        return Response({
+            "total_tickets": total_tickets,
+            "confirmed_tickets": confirmed,
+            "failed_payments": failed,
+            "refunds": refunded,
+            "revenue": revenue
+        })
 
 
 # Book Ticket API....
@@ -272,4 +297,53 @@ class PaymentHistoryView(APIView):
         return Response({
             "success": True,
             "payments": list(payments)
+        })
+        
+        
+
+#  RefundView API....
+class RefundView(APIView):
+
+    def post(self, request):
+        ticket_id = request.data.get("ticket_id")
+
+        try:
+            ticket = Ticket.objects.get(ticket_id=ticket_id)
+        except Ticket.DoesNotExist:
+            return Response({"success": False, "error": "Invalid ticket_id"})
+
+        if ticket.status != "CONFIRMED":
+            return Response({
+                "success": False,
+                "error": "Refund allowed only for CONFIRMED tickets"
+            })
+
+        payment = PaymentHistory.objects.filter(
+            ticket=ticket,
+            status="SUCCESS"
+        ).last()
+
+        if not payment:
+            return Response({"success": False, "error": "No successful payment found"})
+
+        already_refunded = PaymentHistory.objects.filter(
+            ticket=ticket,
+            status="REFUNDED"
+        ).exists()
+
+        if already_refunded:
+            return Response({"success": False, "error": "Already refunded"})
+
+        PaymentHistory.objects.create(
+            ticket=ticket,
+            amount=payment.amount,
+            status="REFUNDED"
+        )
+
+        ticket.status = "CANCELLED"
+        ticket.save()
+
+        return Response({
+            "success": True,
+            "message": "Refund successful"
         })

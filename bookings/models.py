@@ -68,21 +68,15 @@ class Payment(models.Model):
     
 # payment History model...
 class PaymentHistory(models.Model):
-    payment_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    ticket = models.ForeignKey("Ticket", on_delete=models.CASCADE, related_name="payments")
-
-    amount = models.IntegerField()
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ("SUCCESS", "SUCCESS"),
-            ("FAILED", "FAILED"),
-        ]
-    )
-
-    timestamp = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.payment_id} | {self.status}"
     
+    STATUS_CHOICES = [
+        ("SUCCESS", "SUCCESS"),
+        ("FAILED", "FAILED"),
+        ("REFUNDED", "REFUNDED"),
+    ]
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE)
+    amount = models.IntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
     

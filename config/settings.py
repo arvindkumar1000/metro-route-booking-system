@@ -145,3 +145,12 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
 }
+
+
+import os
+from django.contrib.auth import get_user_model
+
+if os.environ.get("CREATE_SUPERUSER") == "True":
+    User = get_user_model()
+    if not User.objects.filter(username="metro_app").exists():
+        User.objects.create_superuser("metro_app", "curiouscode4@gmail.com", "metroapp")

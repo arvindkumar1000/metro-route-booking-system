@@ -11,6 +11,8 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 import random
 from django.db.models import Sum
+from rest_framework.permissions import IsAdminUser
+
 
 
 # IMPORT SERVICES, NOT VIEWS 
@@ -78,7 +80,7 @@ def book_ticket(request):
 
 # AdminStatsView -(ADMIN ANALYTICS APIs)
 class AdminStatsView(APIView):
-
+    permission_classes = [IsAdminUser]
     def get(self, request):
 
         total_tickets = Ticket.objects.count()

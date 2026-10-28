@@ -1,5 +1,7 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from django.db import transaction
+from uuid import UUID
 from rest_framework import status
 from django.utils import timezone
 from datetime import timedelta
@@ -76,24 +78,55 @@ def book_ticket(request):
 
 # AdminStatsView -(ADMIN ANALYTICS APIs)
 class AdminStatsView(APIView):
-    
+
     def get(self, request):
 
         total_tickets = Ticket.objects.count()
-        confirmed = Ticket.objects.filter(status="CONFIRMED").count()
-        failed = PaymentHistory.objects.filter(status="FAILED").count()
-        refunded = PaymentHistory.objects.filter(status="REFUNDED").count()
 
-        revenue = PaymentHistory.objects.filter(
-            status="SUCCESS"
-        ).aggregate(total=Sum("amount"))["total"] or 0
+        confirmed = Ticket.objects.filter(
+            status="CONFIRMED"
+        ).count()
+
+        pending = Ticket.objects.filter(
+            status="PENDING"
+        ).count()
+
+        cancelled = Ticket.objects.filter(
+            status="CANCELLED"
+        ).count()
+
+        failed_payments = PaymentHistory.objects.filter(
+            status="FAILED"
+        ).count()
+
+        refunded_count = PaymentHistory.objects.filter(
+            status="REFUNDED"
+        ).count()
+
+        successful_amount = (
+            PaymentHistory.objects.filter(
+                status="SUCCESS"
+            ).aggregate(total=Sum("amount"))["total"] or 0
+        )
+
+        refunded_amount = (
+            PaymentHistory.objects.filter(
+                status="REFUNDED"
+            ).aggregate(total=Sum("amount"))["total"] or 0
+        )
+
+        net_revenue = successful_amount - refunded_amount
 
         return Response({
             "total_tickets": total_tickets,
             "confirmed_tickets": confirmed,
-            "failed_payments": failed,
-            "refunds": refunded,
-            "revenue": revenue
+            "pending_tickets": pending,
+            "cancelled_tickets": cancelled,
+            "failed_payments": failed_payments,
+            "total_refunds": refunded_count,
+            "successful_payment_amount": successful_amount,
+            "refunded_amount": refunded_amount,
+            "net_revenue": net_revenue
         })
 
 
@@ -174,25 +207,122 @@ class TicketDetailView(APIView):
 
 
 # Cancel Ticket API here....
+
 class CancelTicketView(APIView):
+
     def post(self, request):
         ticket_id = request.data.get("ticket_id")
 
+        #  Validate ticket_id
         if not ticket_id:
             return Response(
-                {"success": False, "error": "ticket_id required"},
+                {
+                    "success": False,
+                    "error": "ticket_id required"
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        ticket = get_object_or_404(Ticket, ticket_id=ticket_id)
+        try:
+            ticket_uuid = UUID(str(ticket_id))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {
+                    "success": False,
+                    "error": "Invalid ticket_id format"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if ticket.status == "CANCELLED":
-            return Response({"success": False, "error": "Ticket already cancelled"})
+        #  Lock the ticket during cancellation
+        with transaction.atomic():
 
-        ticket.status = "CANCELLED"
-        ticket.save()
+            ticket = (
+                Ticket.objects
+                .select_for_update()
+                .filter(ticket_id=ticket_uuid)
+                .first()
+            )
 
-        return Response({"success": True, "message": "Ticket cancelled"})
+            if not ticket:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Ticket not found"
+                    },
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            #  Prevent duplicate cancellation
+            if ticket.status == "CANCELLED":
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Ticket already cancelled"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            #  Do not cancel a used ticket
+            if ticket.is_used:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Used ticket cannot be cancelled"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            #  Reject expired tickets
+            if ticket.valid_until <= timezone.now():
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Expired ticket cannot be cancelled"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            #  Successful payments must use refund flow
+            if ticket.status == "CONFIRMED":
+                return Response(
+                    {
+                        "success": False,
+                        "error": (
+                            "This ticket is confirmed. "
+                            "Use the refund API to process "
+                            "cancellation and refund."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            #  Only pending or failed tickets can use
+            # this cancellation endpoint
+            if ticket.status not in ["PENDING", "FAILED"]:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Ticket cannot be cancelled"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            #  Update ticket status
+            ticket.status = "CANCELLED"
+            ticket.save(update_fields=["status"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Ticket cancelled successfully",
+                "ticket_id": str(ticket.ticket_id),
+                "ticket_status": ticket.status,
+                "refund_status": "NOT_PROCESSED"
+            },
+            status=status.HTTP_200_OK
+        )
+
 
 
 # Ticket Validation API (Exist,Expired,Allready Used, Not Canceled)
@@ -302,48 +432,111 @@ class PaymentHistoryView(APIView):
         
 
 #  RefundView API....
+
+from django.core.exceptions import ValidationError
+
 class RefundView(APIView):
 
     def post(self, request):
         ticket_id = request.data.get("ticket_id")
 
+        # 1. Check required field
+        if not ticket_id:
+            return Response(
+                {
+                    "success": False,
+                    "error": "ticket_id is required"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Validate UUID format
         try:
-            ticket = Ticket.objects.get(ticket_id=ticket_id)
-        except Ticket.DoesNotExist:
-            return Response({"success": False, "error": "Invalid ticket_id"})
+            ticket_uuid = UUID(str(ticket_id))
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {
+                    "success": False,
+                    "error": "Invalid ticket_id format"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if ticket.status != "CONFIRMED":
-            return Response({
-                "success": False,
-                "error": "Refund allowed only for CONFIRMED tickets"
-            })
+        # 3. Perform refund updates atomically
+        with transaction.atomic():
 
-        payment = PaymentHistory.objects.filter(
-            ticket=ticket,
-            status="SUCCESS"
-        ).last()
+            ticket = Ticket.objects.select_for_update().filter(
+                ticket_id=ticket_uuid
+            ).first()
 
-        if not payment:
-            return Response({"success": False, "error": "No successful payment found"})
+            if not ticket:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Ticket not found"
+                    },
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
-        already_refunded = PaymentHistory.objects.filter(
-            ticket=ticket,
-            status="REFUNDED"
-        ).exists()
+            # Check refund history BEFORE checking ticket status
+            already_refunded = PaymentHistory.objects.filter(
+                ticket=ticket,
+                status="REFUNDED"
+            ).exists()
 
-        if already_refunded:
-            return Response({"success": False, "error": "Already refunded"})
+            if already_refunded:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Already refunded"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        PaymentHistory.objects.create(
-            ticket=ticket,
-            amount=payment.amount,
-            status="REFUNDED"
+            # 4. Only confirmed tickets are eligible
+            if ticket.status != "CONFIRMED":
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Refund allowed only for CONFIRMED tickets"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 5. Find successful payment
+            payment = PaymentHistory.objects.filter(
+                ticket=ticket,
+                status="SUCCESS"
+            ).order_by("-created_at").first()
+
+            if not payment:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "No successful payment found"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 6. Create refund history
+            PaymentHistory.objects.create(
+                ticket=ticket,
+                amount=payment.amount,
+                status="REFUNDED"
+            )
+
+            # 7. Cancel ticket
+            ticket.status = "CANCELLED"
+            ticket.save(update_fields=["status"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Refund successful",
+                "ticket_id": str(ticket.ticket_id),
+                "ticket_status": ticket.status,
+                "refund_amount": payment.amount,
+                "refund_status": "REFUNDED"
+            },
+            status=status.HTTP_200_OK
         )
-
-        ticket.status = "CANCELLED"
-        ticket.save()
-
-        return Response({
-            "success": True,
-            "message": "Refund successful"
-        })
